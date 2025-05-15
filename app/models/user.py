@@ -2,7 +2,8 @@
 User models and authentication utilities for the AI Financial Chatbot.
 """
 
-from typing import Optional, Dict, List
+import uuid
+from typing import Optional, Dict, List, Any
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime, timedelta, timezone
 from fastapi import Depends, HTTPException, status
@@ -11,6 +12,7 @@ from jose import JWTError, jwt
 from passlib.context import CryptContext
 
 from app.config import settings
+from app.db.models import UserRepository
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -52,20 +54,6 @@ class TokenData(BaseModel):
     """Token data model."""
     username: Optional[str] = None
 
-# Mock user database - in a real app, this would be a database
-USERS_DB = {
-    "johndoe": {
-        "id": "user1",
-        "username": "johndoe",
-        "email": "johndoe@example.com",
-        "full_name": "John Doe",
-        "hashed_password": pwd_context.hash("secret"),
-        "is_active": True,
-        "is_premium": False,
-        "created_at": datetime.now(timezone.utc) - timedelta(days=30)
-    }
-}
-
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a password against a hash."""
     return pwd_context.verify(plain_password, hashed_password)
@@ -74,16 +62,64 @@ def get_password_hash(password: str) -> str:
     """Get password hash."""
     return pwd_context.hash(password)
 
-def get_user(username: str) -> Optional[UserInDB]:
+async def get_user(username: str) -> Optional[UserInDB]:
     """Get a user by username."""
-    if username in USERS_DB:
-        user_dict = USERS_DB[username]
-        return UserInDB(**user_dict)
-    return None
+    try:
+        user_dict = await UserRepository.get_user_by_username(username)
+        if user_dict:
+            # Convert string timestamp to datetime
+            if isinstance(user_dict.get("created_at"), str):
+                user_dict["created_at"] = datetime.fromisoformat(user_dict["created_at"].replace("Z", "+00:00"))
+            return UserInDB(**user_dict)
+        return None
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {str(e)}")
 
-def authenticate_user(username: str, password: str) -> Optional[User]:
+async def create_user(user_data: UserCreate) -> User:
+    """Create a new user."""
+    try:
+        # Check if user already exists
+        existing_user = await get_user(user_data.username)
+        if existing_user:
+            raise HTTPException(status_code=400, detail="Username already registered")
+
+        # Create user data for database
+        hashed_password = get_password_hash(user_data.password)
+        user_id = str(uuid.uuid4())
+        created_at = datetime.now(timezone.utc)
+
+        user_dict = {
+            "id": user_id,
+            "username": user_data.username,
+            "email": user_data.email,
+            "full_name": user_data.full_name,
+            "hashed_password": hashed_password,
+            "is_active": True,
+            "is_premium": False,
+            "created_at": created_at.isoformat()
+        }
+
+        # Insert into database
+        await UserRepository.create_user(user_dict)
+
+        # Return user without password
+        return User(
+            id=user_id,
+            username=user_data.username,
+            email=user_data.email,
+            full_name=user_data.full_name,
+            is_active=True,
+            is_premium=False,
+            created_at=created_at
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating user: {str(e)}")
+
+async def authenticate_user(username: str, password: str) -> Optional[User]:
     """Authenticate a user."""
-    user = get_user(username)
+    user = await get_user(username)
     if not user:
         return None
     if not verify_password(password, user.hashed_password):
@@ -121,7 +157,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> User:
     except JWTError:
         raise credentials_exception
 
-    user = get_user(token_data.username)
+    user = await get_user(token_data.username)
     if user is None:
         raise credentials_exception
 
