@@ -4,10 +4,11 @@ Loads environment variables and provides settings for the application.
 """
 
 import os
-from typing import List
+from typing import List, Optional
 from pydantic import BaseModel, Field
+from pydantic_settings import BaseSettings
 
-class Settings(BaseModel):
+class Settings(BaseSettings):
     """Application settings."""
 
     # API settings
@@ -28,9 +29,21 @@ class Settings(BaseModel):
     FINANCIAL_API_KEY: str = Field(default=os.getenv("FINANCIAL_API_KEY", ""))
     FINANCIAL_API_URL: str = Field(default=os.getenv("FINANCIAL_API_URL", "https://api.example.com"))
 
+    # Database settings
+    SUPABASE_URL: str = Field(default=os.getenv("SUPABASE_URL", ""))
+    SUPABASE_KEY: str = Field(default=os.getenv("SUPABASE_KEY", ""))
+
+    # Database table names
+    DB_USERS_TABLE: str = "users"
+    DB_CHAT_HISTORY_TABLE: str = "chat_history"
+
+    # Database credentials (optional)
+    DB_PASSWORD: Optional[str] = None
+
     model_config = {
         "env_file": ".env",
-        "case_sensitive": True
+        "case_sensitive": True,
+        "extra": "ignore"  # Ignore extra fields not defined in the model
     }
 
 # Initialize settings
